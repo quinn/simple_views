@@ -1,0 +1,157 @@
+<?php
+
+function wg_simple_view($query, $count = NULL, $opts = array()) {
+  if ($opts['default_sort'] && !$_GET['sort']) {
+    list($order, $sort) = split(' ', $opts['default_sort']);
+    $_GET['sort'] = $sort;
+    $_GET['order'] = $order;
+  }
+  
+  build_filter_query($query);
+  // analyze($query);
+  $result = pager_query($query, $per_page = 40, 0, $count);
+  
+  while ($rec = db_fetch_array($result)) {
+    $rows[] = build_table_row($rec);
+  }
+  
+  $output .= drupal_get_form('filter_opts_form');
+  $output .= build_table_theme($rows);
+  
+  return $output;
+}
+
+function build_table_row($record) {
+  global $filter_opts_columns;
+
+  $row[] = '<input class="adjuster-check" type="checkbox" name="adjuster-checked['. $record['uid'] .']" />';
+  foreach($filter_opts_columns as $column) {
+    $column = (object) $column;
+    $val = $record[$column->field];
+    
+    if ($column->callback) {
+      $callback = create_function('$val,$record=null',$column->callback);
+      $row[] = $callback($val,$record);
+    }
+    else {
+      $row[] = $val;
+    }
+  }
+  
+  return $row;
+}
+
+function build_table_theme($rows) {
+  global $filter_opts_columns;
+  array_unshift($filter_opts_columns, '<input class="adjuster-check-all" type="checkbox" />');
+  return theme('table', $filter_opts_columns, $rows, array('id' => 'adjusters-filter'));
+}
+
+function new_column($field, $title, $callback = NULL) {
+  global $filter_opts_columns;
+  
+  $filter_opts_columns[] = array(
+    'field' => $field,
+    'data'  => t($title),
+    'callback' => $callback,
+  );
+}
+
+function new_filter() {
+  global $filter_opts_filters;
+  list($col_name, $get_name, $title, $type) = func_get_args();
+  $type = $type ? $type : 'textfield';
+  
+  if ($get_name) {
+    if ($type == 'textfield') {
+      $filter_opts_filters[] = array(
+        'col_name' => $col_name,
+        'get_name' => $get_name,
+        'title'    => t($title),
+      );
+    }
+  }
+  else {
+    $filter_opts_filters[] = $col_name;
+  }
+}
+
+function filter_opts_form() {
+  global $filter_opts_filters;
+  $form['#method'] = 'get';
+
+  foreach($filter_opts_filters as $filter) {
+    if (!is_array($filter))
+      continue;
+    $filter = (object) $filter;
+    
+    $form[$filter->get_name] = array(
+      '#type' => 'textfield',
+      '#title' => $filter->title,
+      '#default_value' => $_GET[$filter->get_name],
+    );
+  }
+  
+  $form['submit'] = array(
+    '#type' => 'button', 
+    '#value' => t('Filter'),
+  );
+  
+  return $form;
+}
+
+function e($s) {
+  return mysql_real_escape_string($s);
+}
+
+function build_filter_query(&$query) {
+  $query = strtr($query, array(
+    "%where" => build_where_opts(),
+    "%select" => build_select_opts(),
+    "%order" => build_order_opts(),
+  ));
+}
+
+function build_select_opts() {
+  global $filter_opts_filters;
+  
+  foreach($filter_opts_filters as $filter) {
+    if (!is_array($filter))
+      continue;
+    $filter = (object) $filter;
+
+    $opts .= ", $filter->col_name as $filter->get_name\n";
+  }
+  
+  return $opts;
+}
+
+function build_where_opts() {
+  global $filter_opts_filters;
+  
+  foreach($filter_opts_filters as $filter) {
+    if (is_array($filter)) {
+      $filter = (object) $filter;
+
+      if ($_GET[$filter->get_name]) {
+        $getval = e($_GET[$filter->get_name]);
+        $opt_r[] = "{$filter->col_name} LIKE '%%{$getval}%%'";
+      }
+    } 
+    else {
+      $opt_r[] = $filter;
+    }
+  }
+  
+  if ( $opt_r ) {
+    $opts .= "WHERE \n";
+    $opts .= join("\nAND ", $opt_r);
+  }
+  
+  return $opts;
+}
+
+function build_order_opts() {
+  global $filter_opts_columns;
+  return tablesort_sql($filter_opts_columns);
+}
